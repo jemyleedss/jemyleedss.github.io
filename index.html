@@ -1,10 +1,263 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Meu Site</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📦 Arquivos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--sub:#8b949e;
+      --accent:#58a6ff;--green:#238636;--green-h:#2ea043;--danger:#f85149}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     min-height:100vh;padding:28px 20px}
+h1{font-size:1.5rem;color:var(--accent);margin-bottom:4px}
+.sub{color:var(--sub);font-size:.85rem;margin-bottom:24px}
+.sub a{color:var(--accent);text-decoration:none}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{padding:10px 16px;text-align:left;font-size:.74rem;font-weight:600;
+   text-transform:uppercase;letter-spacing:.06em;color:var(--sub);
+   border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:12px 16px;border-top:1px solid var(--border);font-size:.9rem;vertical-align:middle}
+tr:hover td{background:rgba(255,255,255,.025)}
+.fname{font-weight:500}
+.meta{color:var(--sub);font-size:.82rem}
+.tag{display:inline-block;border-radius:4px;padding:2px 8px;font-size:.72rem;
+     font-weight:600;vertical-align:middle;margin-left:8px;white-space:nowrap}
+.tag-enc{background:#1a2c1a;color:#3fb950;border:1px solid var(--green)}
+.tag-open{background:#1c1f23;color:var(--sub);border:1px solid var(--border)}
+.btn-dl{background:var(--green);color:#fff;border:none;border-radius:6px;
+        padding:6px 16px;cursor:pointer;font-size:.83rem;font-weight:500;white-space:nowrap}
+.btn-dl:hover{background:var(--green-h)}
+.btn-dl:disabled{opacity:.45;cursor:default}
+.empty{padding:44px;text-align:center;color:var(--sub)}
+.spin{display:inline-block;width:20px;height:20px;border:2px solid var(--border);
+      border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* modal */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);
+         z-index:50;align-items:center;justify-content:center}
+.overlay.open{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:12px;
+       padding:28px 26px;width:400px;max-width:95vw}
+.modal-title{font-size:1.05rem;font-weight:600;margin-bottom:6px}
+.modal-file{color:var(--sub);font-size:.85rem;margin-bottom:18px;word-break:break-all}
+.modal input{width:100%;background:var(--bg);border:1px solid var(--border);
+             border-radius:6px;color:var(--text);padding:10px 12px;
+             font-size:.95rem;outline:none}
+.modal input:focus{border-color:var(--accent)}
+.modal-err{color:var(--danger);font-size:.82rem;min-height:20px;margin-top:8px}
+.modal-btns{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+.modal-btns button{padding:9px 20px;border:none;border-radius:6px;cursor:pointer;
+                   font-size:.88rem;font-weight:500}
+.btn-cancel{background:var(--border);color:var(--text)}
+.btn-cancel:hover{background:#3d444d}
+.btn-ok{background:var(--green);color:#fff}
+.btn-ok:hover{background:var(--green-h)}
+.btn-ok:disabled{opacity:.45;cursor:default}
+</style>
 </head>
 <body>
-  <h1>Olá, mundo!</h1>
+<h1>📦 Meus Arquivos</h1>
+<p class="sub">Hospedados no GitHub Pages &nbsp;·&nbsp;
+  <a href="#" onclick="loadFiles();return false">🔄 Atualizar</a></p>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Nome</th>
+        <th>Tamanho</th>
+        <th>Enviado em</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="4" class="empty"><div class="spin"></div></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- modal de senha -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-title">🔐 Arquivo protegido por senha</div>
+    <div class="modal-file" id="modal-fname"></div>
+    <input type="password" id="modal-pass"
+           placeholder="Digite a senha para descriptografar…" autocomplete="off">
+    <div class="modal-err" id="modal-err"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="btn-ok" id="btn-ok">⬇ Baixar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PBKDF2_ITER = 310000;
+let pendingBytes = null, pendingName = null;
+
+/* ── utilidades ── */
+function b64ToBytes(s) {
+  const b = atob(s), a = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmt(n) {
+  n = parseInt(n)||0;
+  return n<1024 ? n+' B' : n<1048576 ? (n/1024).toFixed(1)+' KB' : (n/1048576).toFixed(1)+' MB';
+}
+function fmtDate(s) {
+  try { return new Date(s).toLocaleString('pt-BR'); } catch(e) { return s; }
+}
+function saveBlobAs(bytes, name) {
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+/* ── modal ── */
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('modal-pass').value = '';
+  document.getElementById('modal-err').textContent = '';
+  pendingBytes = pendingName = null;
+}
+
+/* ── carregar lista de arquivos ── */
+async function loadFiles() {
+  const tb = document.getElementById('tbody');
+  tb.innerHTML = '<tr><td colspan="4" class="empty"><div class="spin"></div></td></tr>';
+  try {
+    const resp = await fetch('uploads/index.txt?_=' + Date.now());
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const txt = (await resp.text()).trim();
+    if (!txt) {
+      tb.innerHTML = '<tr><td colspan="4" class="empty">Nenhum arquivo enviado ainda.</td></tr>';
+      return;
+    }
+    const lines = txt.split('\n').filter(l => l.trim());
+    if (!lines.length) {
+      tb.innerHTML = '<tr><td colspan="4" class="empty">Nenhum arquivo enviado ainda.</td></tr>';
+      return;
+    }
+    tb.innerHTML = '';
+    for (const line of lines) {
+      const parts = line.split('|');
+      if (parts.length < 4) continue;
+      const [id, name, size, date] = parts.map(p => p.trim());
+      if (!id || !name) continue;
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td'); td1.className = 'fname';
+      td1.textContent = name;
+      const td2 = document.createElement('td'); td2.className = 'meta'; td2.textContent = fmt(size);
+      const td3 = document.createElement('td'); td3.className = 'meta'; td3.textContent = fmtDate(date);
+      const td4 = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'btn-dl'; btn.textContent = '⬇ Baixar';
+      btn.dataset.id = id; btn.dataset.name = name;
+      btn.addEventListener('click', () => startDownload(btn.dataset.id, btn.dataset.name, btn));
+      td4.appendChild(btn);
+      tr.append(td1, td2, td3, td4);
+      tb.appendChild(tr);
+    }
+  } catch(e) {
+    tb.innerHTML = '<tr><td colspan="4" class="empty" style="color:var(--danger)">Erro ao carregar: '
+                   + esc(e.message) + '</td></tr>';
+  }
+}
+
+/* ── iniciar download (peek magic para saber se tem senha) ── */
+async function startDownload(id, name, btn) {
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const resp = await fetch('uploads/' + id + '.json');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const json = await resp.json();
+    const bytes = b64ToBytes(json.d);
+    const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+    if (magic === 'GHP0') {
+      await processBlob(bytes, null, name);
+    } else if (magic === 'GHP1') {
+      pendingBytes = bytes; pendingName = name;
+      document.getElementById('modal-fname').textContent = name;
+      document.getElementById('overlay').classList.add('open');
+      document.getElementById('modal-pass').focus();
+    } else {
+      alert('Formato desconhecido: ' + magic);
+    }
+  } catch(e) {
+    alert('Erro ao buscar arquivo: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '⬇ Baixar';
+  }
+}
+
+/* ── descriptografar + descomprimir + salvar ── */
+async function processBlob(bytes, password, name) {
+  const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+  let flag, data;
+
+  if (magic === 'GHP0') {
+    /* Sem senha: flag[1] + payload */
+    flag = bytes[4];
+    data = bytes.slice(5);
+  } else {
+    /* GHP1: salt(16) + iv(12) + AES-GCM{ flag(1) + payload } */
+    const salt = bytes.slice(4, 20);
+    const iv   = bytes.slice(20, 32);
+    const ct   = bytes.slice(32);
+    try {
+      const km = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+      const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: PBKDF2_ITER, hash: 'SHA-256' },
+        km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+      const dec = new Uint8Array(
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
+      flag = dec[0];
+      data = dec.slice(1);
+    } catch(e) {
+      document.getElementById('modal-err').textContent =
+        '❌ Senha incorreta ou arquivo corrompido.';
+      return false;
+    }
+  }
+
+  /* flag 1 = deflate */
+  if (flag === 1) data = pako.inflate(data);
+  saveBlobAs(data, name);
+  closeModal();
+  return true;
+}
+
+/* ── eventos do modal ── */
+document.getElementById('btn-ok').addEventListener('click', async () => {
+  const pass = document.getElementById('modal-pass').value;
+  if (!pass) { document.getElementById('modal-err').textContent = 'Informe a senha.'; return; }
+  document.getElementById('modal-err').textContent = '';
+  const btn = document.getElementById('btn-ok');
+  btn.disabled = true; btn.textContent = '…';
+  await processBlob(pendingBytes, pass, pendingName);
+  btn.disabled = false; btn.textContent = '⬇ Baixar';
+});
+
+document.getElementById('modal-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btn-ok').click();
+});
+
+document.getElementById('overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('overlay')) closeModal();
+});
+
+/* ── inicializar ── */
+loadFiles();
+</script>
 </body>
 </html>
